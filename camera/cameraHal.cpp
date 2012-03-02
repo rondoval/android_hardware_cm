@@ -362,8 +362,11 @@ int CameraHAL_GetCam_Info(int camera_id, struct camera_info *info) {
    HAL_getCameraInfo(camera_id, &cam_info);
 
    info->facing = cam_info.facing;
-//   info->orientation = cam_info.orientation;
+#ifdef MOTOROLA_CAMERA
    info->orientation = 90; // Milestone2 camera returns 0, but then picture is rotated
+#else
+   info->orientation = cam_info.orientation;
+#endif
 
    LOGD("%s: id:%i faceing:%i orientation: %i", __FUNCTION__, camera_id, info->facing, info->orientation);
 
@@ -372,10 +375,12 @@ int CameraHAL_GetCam_Info(int camera_id, struct camera_info *info) {
 
 void CameraHAL_FixupParams(CameraParameters &settings)
 {
+#ifdef MOTOROLA_CAMERA
   // Milestone2 camera doesn't support YUV420sp... it advertises so, but then sends YUV422I-yuyv data
   settings.set(CameraParameters::KEY_VIDEO_FRAME_FORMAT, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.setPreviewFormat(CameraParameters::PIXEL_FORMAT_YUV422I);
   LOGD("Parameters fixed up");
+#endif
 }
 
 /* Hardware Camera interface handlers. */
