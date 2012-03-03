@@ -20,8 +20,10 @@ LOCAL_SHARED_LIBRARIES += \
     libhardware \
     libcamera_client \
     libui \
+    libstlport \
     $(BOARD_CAMERA_LIBRARIES)
 
+include external/stlport/libstlport.mk
 
 ifneq ($(BOARD_CAMERA_MOTOROLA_COMPAT),)
 LOCAL_CFLAGS += \

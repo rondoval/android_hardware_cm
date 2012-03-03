@@ -30,13 +30,16 @@
  */
 
 #define LOG_TAG "CameraHAL"
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 
 #include "CameraHardwareInterface.h"
 #include <hardware/camera.h>
 #include <binder/IMemory.h>
 #include <hardware/gralloc.h>
 #include <utils/Errors.h>
+#include <vector>
+
+using namespace std;
 
 /* Prototypes and extern functions. */
 extern "C" android::sp<android::CameraHardwareInterface> HAL_openCameraHardware(int cameraId);
@@ -86,9 +89,9 @@ struct legacy_camera_device {
    // Old world
    sp<CameraHardwareInterface>  hwif;
    gralloc_module_t const               *gralloc;
-   camera_memory_t                      *clientData;
+   vector<camera_memory_t*>              sentMem;
    sp<Overlay>                           overlay;
- 
+
    int32_t                               previewWidth;
    int32_t                               previewHeight;
    OverlayFormats                        previewFormat;
@@ -98,6 +101,11 @@ struct legacy_camera_device {
 /** camera_hw_device implementation **/
 static inline struct legacy_camera_device * to_lcdev(struct camera_device *dev) {
     return reinterpret_cast<struct legacy_camera_device *>(dev);
+}
+
+static inline void log_camera_params(const char* name, const CameraParameters params) {
+    LOGV("%s: dumping camera params", name);
+    params.dump();
 }
 
 //
@@ -197,7 +205,7 @@ void Yuv422iToRgba8888 (char* rgb, char* yuv422i, int width, int height) {
 
 void CameraHAL_ProcessPreviewData(char *frame, size_t size, legacy_camera_device *lcdev) {
     LOGV("%s: frame=%p, size=%d, camera=%p", __FUNCTION__, frame, size, lcdev);
-    if (NULL != lcdev->window && NULL != lcdev->request_memory) {
+    if (NULL != lcdev->window) {
         int32_t stride;
         buffer_handle_t *bufHandle = NULL;
         int retVal = lcdev->window->dequeue_buffer(lcdev->window, &bufHandle, &stride);
@@ -275,22 +283,19 @@ void CameraHAL_HandlePreviewData(const sp<IMemory>& dataPtr, void* user) {
   }
 }
 
-camera_memory_t* CameraHAL_GenClientData(const sp<IMemory> &dataPtr, void *user) {
+camera_memory_t* CameraHAL_GenClientData(const sp<IMemory> &dataPtr, legacy_camera_device *lcdev) {
    ssize_t          offset;
    size_t           size;
    camera_memory_t *clientData = NULL;
-   struct legacy_camera_device *lcdev = (struct legacy_camera_device *) user;
    sp<IMemoryHeap> mHeap = dataPtr->getMemory(&offset, &size);
 
    LOGV("CameraHAL_GenClientData: offset:%#x size:%#x base:%p",
         (unsigned)offset, size, mHeap != NULL ? mHeap->base() : 0);
 
-   LOGV("%s: #1", __FUNCTION__);
    clientData = lcdev->request_memory(-1, size, 1, lcdev->user);
-   LOGV("%s: #2", __FUNCTION__);
    if (clientData != NULL) {
+      LOGV("%s: clientData=%p clientData->data=%p", __FUNCTION__, clientData, clientData->data);
       memcpy(clientData->data, (char *)(mHeap->base()) + offset, size);
-   LOGV("%s: #3", __FUNCTION__);
    } else {
       LOGV("CameraHAL_GenClientData: ERROR allocating memory from client");
    }
@@ -303,15 +308,11 @@ void CameraHAL_DataCb(int32_t msg_type, const sp<IMemory>& dataPtr, void *user) 
    LOGV("CameraHAL_DataCb: msg_type:%d user:%p", msg_type, user);
 
    if (lcdev->data_callback != NULL && lcdev->request_memory != NULL) {
-      /* Make sure any pre-existing heap is released */
-      if (lcdev->clientData != NULL) {
-         lcdev->clientData->release(lcdev->clientData);
-         lcdev->clientData = NULL;
-      }
-      lcdev->clientData = CameraHAL_GenClientData(dataPtr, lcdev);
-      if (lcdev->clientData != NULL) {
+      camera_memory_t *mem = CameraHAL_GenClientData(dataPtr, lcdev);
+      if (mem != NULL) {
          LOGV("CameraHAL_DataCb: Posting data to client");
-         lcdev->data_callback(msg_type, lcdev->clientData, 0, NULL, lcdev->user);
+         lcdev->sentMem.push_back(mem);
+         lcdev->data_callback(msg_type, mem, 0, NULL, lcdev->user);
       }
    }
 
@@ -327,12 +328,12 @@ void CameraHAL_DataTSCb(nsecs_t timestamp, int32_t msg_type, const sp<IMemory>& 
    LOGV("CameraHAL_DataTSCb: timestamp:%lld msg_type:%d user:%p",
         timestamp /1000, msg_type, user);
 
-   if (lcdev->data_callback != NULL && lcdev->request_memory != NULL) {
-      camera_memory_t *clientData = CameraHAL_GenClientData(dataPtr, lcdev);
-      if (clientData != NULL) {
-         LOGV("CameraHAL_DataTSCb: Posting data to client timestamp:%lld",
-              systemTime());
-         lcdev->data_timestamp_callback(timestamp, msg_type, clientData, 0, lcdev->user);
+   if (lcdev->data_timestamp_callback != NULL && lcdev->request_memory != NULL) {
+      camera_memory_t *mem = CameraHAL_GenClientData(dataPtr, lcdev);
+      if (mem != NULL) {
+         LOGV("CameraHAL_DataTSCb: Posting data to client timestamp:%lld", systemTime());
+         lcdev->sentMem.push_back(mem);
+         lcdev->data_timestamp_callback(timestamp, msg_type, mem, /*index*/0, lcdev->user);
          lcdev->hwif->releaseRecordingFrame(dataPtr);
       } else {
          LOGV("CameraHAL_DataTSCb: ERROR allocating memory from client");
@@ -378,7 +379,10 @@ void CameraHAL_FixupParams(CameraParameters &settings)
 #ifdef MOTOROLA_CAMERA
   // Milestone2 camera doesn't support YUV420sp... it advertises so, but then sends YUV422I-yuyv data
   settings.set(CameraParameters::KEY_VIDEO_FRAME_FORMAT, CameraParameters::PIXEL_FORMAT_YUV422I);
+  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FORMATS, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.setPreviewFormat(CameraParameters::PIXEL_FORMAT_YUV422I);
+
+  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_SIZES, "640x480");
   LOGD("Parameters fixed up");
 #endif
 }
@@ -494,6 +498,8 @@ void camera_enable_msg_type(struct camera_device * device, int32_t msg_type) {
 void camera_disable_msg_type(struct camera_device * device, int32_t msg_type) {
    struct legacy_camera_device *lcdev = to_lcdev(device);
    LOGV("camera_disable_msg_type: msg_type:%d\n", msg_type);
+   //TODO on CAMERA_MSG_VIDEO_FRAME disable we need to release video buffers
+   // allocated in CameraHAL_GenClientData() (related to video frames
    lcdev->hwif->disableMsgType(msg_type);
 }
 
@@ -524,10 +530,8 @@ int camera_preview_enabled(struct camera_device * device) {
 }
 
 int camera_store_meta_data_in_buffers(struct camera_device * device, int enable) {
-   /*struct legacy_camera_device *lcdev = to_lcdev(device);
-   int ret = lcdev->hwif->storeMetaDataInBuffers(enable);*/
    LOGV("camera_store_meta_data_in_buffers:\n");
-   return NO_ERROR;
+   return INVALID_OPERATION;
 }
 
 int camera_start_recording(struct camera_device * device) {
@@ -550,11 +554,19 @@ int camera_recording_enabled(struct camera_device * device) {
 }
 
 void camera_release_recording_frame(struct camera_device * device, const void *opaque) {
-   /*
-    * We release the frame immediately in CameraHAL_DataTSCb after making a
-    * copy. So, this is just a NOP.
-    */
-   LOGV("camera_release_recording_frame: opaque:%p\n", opaque);
+   struct legacy_camera_device *lcdev = to_lcdev(device);
+   LOGV("camera_release_recording_frame: opaque: %p", opaque);
+   if (opaque != NULL) {
+       for(vector<camera_memory_t*>::iterator it = lcdev->sentMem.begin(); it != lcdev->sentMem.end(); ++it) {
+           camera_memory_t *mem = *it;
+           if (mem->data == opaque) {
+               LOGV("found, removing");
+               mem->release(mem);
+               lcdev->sentMem.erase(it);
+               break;
+           }
+       }
+   }
 }
 
 int camera_auto_focus(struct camera_device * device) {
@@ -587,9 +599,9 @@ int camera_cancel_picture(struct camera_device * device) {
 
 int camera_set_parameters(struct camera_device * device, const char *params) {
    struct legacy_camera_device *lcdev = to_lcdev(device);
-   LOGD("camera_set_parameters: %s\n", params);
    String8 s(params);
    CameraParameters p(s);
+   log_camera_params(__FUNCTION__, s);
    lcdev->hwif->setParameters(p);
    return NO_ERROR;
 }
@@ -597,12 +609,10 @@ int camera_set_parameters(struct camera_device * device, const char *params) {
 char* camera_get_parameters(struct camera_device * device) {
    struct legacy_camera_device *lcdev = to_lcdev(device);
    char *rc = NULL;
-   LOGD("camera_get_parameters\n");
    CameraParameters params(lcdev->hwif->getParameters());
    CameraHAL_FixupParams(params);
+   log_camera_params(__FUNCTION__, params);
    rc = strdup((char *)params.flatten().string());
-   LOGD("camera_get_parameters: returning rc:%p :%s\n",
-        rc, (rc != NULL) ? rc : "EMPTY STRING");
    return rc;
 }
 
@@ -665,7 +675,7 @@ int camera_device_open(const hw_module_t* module, const char* name, hw_device_t*
    LOGD("%s: name:%s device:%p cameraId:%d\n", __FUNCTION__, name, device, cameraId);
 
    lcdev = (struct legacy_camera_device *)calloc(1, sizeof(*lcdev));
-   //if lcdev = null -ENOMEM
+   //TODO if lcdev = null -ENOMEM
    camera_ops = (camera_device_ops_t *)malloc(sizeof(*camera_ops));
    memset(camera_ops, 0, sizeof(*camera_ops));
 
