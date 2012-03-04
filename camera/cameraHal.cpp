@@ -225,6 +225,7 @@ void CameraHAL_ProcessPreviewData(char *frame, size_t size, legacy_camera_device
                             0, 0, lcdev->previewWidth, lcdev->previewHeight, &vaddr);
                 while (err && tries) {
                     // Pano frames almost always need a retry...
+                    LOGV("%s: gralloc lock retry", __FUNCTION__);
                     usleep(1000);
                     lcdev->gralloc->unlock(lcdev->gralloc, *bufHandle);
                     err = lcdev->gralloc->lock(lcdev->gralloc, *bufHandle, GRALLOC_USAGE_SW_WRITE_OFTEN,
@@ -248,11 +249,11 @@ void CameraHAL_ProcessPreviewData(char *frame, size_t size, legacy_camera_device
                     }
 
                     lcdev->gralloc->unlock(lcdev->gralloc, *bufHandle);
-                    if (0 != lcdev->window->enqueue_buffer(lcdev->window, bufHandle)) {
-                        LOGE("%s: could not enqueue gralloc buffer", __FUNCTION__);
-                    }
                 } else {
                     LOGE("%s: could not lock gralloc buffer", __FUNCTION__);
+                }
+                if (0 != lcdev->window->enqueue_buffer(lcdev->window, bufHandle)) {
+                    LOGE("%s: could not enqueue gralloc buffer", __FUNCTION__);
                 }
             } else {
                 LOGE("%s: ERROR locking the buffer", __FUNCTION__);
@@ -384,35 +385,39 @@ void CameraHAL_FixupParams(CameraParameters &settings)
   settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FORMATS, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.setPreviewFormat(CameraParameters::PIXEL_FORMAT_YUV422I);
 
-  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_SIZES, "640x480");
   LOGD("Parameters fixed up");
 #endif
+}
+
+inline void destroyOverlay(legacy_camera_device *lcdev) {
+  if (lcdev->overlay != NULL) {
+      lcdev->hwif->setOverlay(NULL);
+      lcdev->overlay = NULL;
+  }
 }
 
 /* Hardware Camera interface handlers. */
 int camera_set_preview_window(struct camera_device * device, struct preview_stream_ops *window) {
   int rv = -EINVAL;
-  const int kBufferCount = 4;
   struct legacy_camera_device *lcdev = to_lcdev(device);
 
-  LOGV("camera_set_preview_window : Window :%p", window);
+  LOGV("camera_set_preview_window : Window:%p", window);
   if (device == NULL) {
-      LOGE("camera_set_preview_window : Invalid device.");
+      LOGE("camera_set_preview_window: Invalid device.");
       return -EINVAL;
   }
 
   if (lcdev->window == window) {
-      return 0;
+      return NO_ERROR;
   }
 
   lcdev->window = window;
-
-  if (!window) {
-      // doesn't it mean something?
-      LOGD("%s: window is NULL", __FUNCTION__);
-      return -EINVAL;
+  if (window == NULL) {
+      // It means we need to release old window
+      LOGV("%s: releasing previous window", __FUNCTION__);
+      destroyOverlay(lcdev);
+      return NO_ERROR;
   }
-
   LOGV("%s : OK window is %p", __FUNCTION__, window);
 
   if (!lcdev->gralloc) {
@@ -420,24 +425,22 @@ int camera_set_preview_window(struct camera_device * device, struct preview_stre
       int err = 0;
       if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
           lcdev->gralloc = (const gralloc_module_t *)module;
+          LOGD("%s: loaded gralloc, module name=%s; author=%s", __FUNCTION__, module->name, module->author);
       } else {
           LOGE("%s: Fail on loading gralloc HAL", __FUNCTION__);
       }
   }
-
-
   LOGV("%s: OK on loading gralloc HAL", __FUNCTION__);
+
   int min_bufs = -1;
   if (window->get_min_undequeued_buffer_count(window, &min_bufs)) {
       LOGE("%s: could not retrieve min undequeued buffer count", __FUNCTION__);
       return -1;
   }
 
-  LOGV("%s: bufs:%i", __FUNCTION__, min_bufs);
-  if (min_bufs >= kBufferCount) {
-      LOGE("%s: min undequeued buffer count %i is too high (expecting at most %i)", __FUNCTION__, min_bufs, kBufferCount - 1);
-  }
+  LOGV("%s: min bufs:%i", __FUNCTION__, min_bufs);
 
+  int kBufferCount = min_bufs + 2;
   LOGV("%s: setting buffer count to %i", __FUNCTION__, kBufferCount);
   if (window->set_buffer_count(window, kBufferCount)) {
       LOGE("%s: could not set buffer count", __FUNCTION__);
@@ -446,7 +449,7 @@ int camera_set_preview_window(struct camera_device * device, struct preview_stre
 
   CameraParameters params(lcdev->hwif->getParameters());
   params.getPreviewSize(&lcdev->previewWidth, &lcdev->previewHeight);
-  int hal_pixel_format = HAL_PIXEL_FORMAT_RGBA_8888; // It's becaise we don't really have hw acceleration... it's from default gralloc
+  int hal_pixel_format = HAL_PIXEL_FORMAT_RGBA_8888;
 
   const char *str_preview_format = params.getPreviewFormat();
   LOGD("%s: preview format %s", __FUNCTION__, str_preview_format);
@@ -638,6 +641,7 @@ int camera_send_command(struct camera_device * device, int32_t cmd, int32_t arg0
 void camera_release(struct camera_device * device) {
    struct legacy_camera_device *lcdev = to_lcdev(device);
    LOGV("camera_release:\n");
+   destroyOverlay(lcdev);
    lcdev->hwif->release();
 }
 
