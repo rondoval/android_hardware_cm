@@ -30,7 +30,7 @@
  */
 
 #define LOG_TAG "CameraHAL"
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 
 #include "CameraHardwareInterface.h"
 #include <hardware/camera.h>
@@ -311,7 +311,9 @@ void CameraHAL_DataCb(int32_t msg_type, const sp<IMemory>& dataPtr, void *user) 
       camera_memory_t *mem = CameraHAL_GenClientData(dataPtr, lcdev);
       if (mem != NULL) {
          LOGV("CameraHAL_DataCb: Posting data to client");
-         lcdev->sentMem.push_back(mem);
+         if (msg_type == CAMERA_MSG_VIDEO_FRAME) {
+             lcdev->sentMem.push_back(mem);
+         }
          lcdev->data_callback(msg_type, mem, 0, NULL, lcdev->user);
       }
    }
@@ -498,8 +500,13 @@ void camera_enable_msg_type(struct camera_device * device, int32_t msg_type) {
 void camera_disable_msg_type(struct camera_device * device, int32_t msg_type) {
    struct legacy_camera_device *lcdev = to_lcdev(device);
    LOGV("camera_disable_msg_type: msg_type:%d\n", msg_type);
-   //TODO on CAMERA_MSG_VIDEO_FRAME disable we need to release video buffers
-   // allocated in CameraHAL_GenClientData() (related to video frames
+   if (msg_type == CAMERA_MSG_VIDEO_FRAME) {
+       LOGV("%s: releasing stale video frames", __FUNCTION__);
+       for(vector<camera_memory_t*>::iterator it = lcdev->sentMem.begin(); it != lcdev->sentMem.end(); ++it) {
+           (*it)->release(*it);
+       }
+       lcdev->sentMem.clear();
+   }
    lcdev->hwif->disableMsgType(msg_type);
 }
 
