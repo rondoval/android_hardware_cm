@@ -42,13 +42,20 @@
 using namespace std;
 
 /* Prototypes and extern functions. */
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+extern "C" android::sp<android::CameraHardwareInterface> openCameraHardware(int cameraId);
+#else
 extern "C" android::sp<android::CameraHardwareInterface> HAL_openCameraHardware(int cameraId);
 extern "C" int HAL_getNumberOfCameras();
 extern "C" void HAL_getCameraInfo(int cameraId, struct CameraInfo* cameraInfo);
+#endif
 
 namespace android {
     int camera_device_open(const hw_module_t* module, const char* name, hw_device_t** device);
     int CameraHAL_GetCam_Info(int camera_id, struct camera_info *info);
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+    int CameraHAL_GetNumberOfCameras(void);
+#endif
 }
 
 static hw_module_methods_t camera_module_methods = {
@@ -67,7 +74,11 @@ camera_module_t HAL_MODULE_INFO_SYM = {
       dso: NULL,
       reserved: {0},
    },
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+   get_number_of_cameras: android::CameraHAL_GetNumberOfCameras,
+#else
    get_number_of_cameras: android::HAL_getNumberOfCameras,
+#endif
    get_camera_info: android::CameraHAL_GetCam_Info,
 };
 
@@ -358,10 +369,21 @@ void CameraHAL_NotifyCb(int32_t msg_type, int32_t ext1, int32_t ext2, void *user
    }
 }
 
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+int CameraHAL_GetNumberOfCameras(void) {
+    LOGV("%s", __FUNCTION__);
+    return 1;
+}
+#endif
+
 int CameraHAL_GetCam_Info(int camera_id, struct camera_info *info) {
    LOGV("%s", __FUNCTION__);
    int rv = 0;
 
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+   info->facing = CAMERA_FACING_BACK;
+   info->orientation = 90;
+#else
    CameraInfo cam_info;
    HAL_getCameraInfo(camera_id, &cam_info);
 
@@ -371,6 +393,7 @@ int CameraHAL_GetCam_Info(int camera_id, struct camera_info *info) {
 #else
    info->orientation = cam_info.orientation;
 #endif
+#endif //BOARD_USE_FROYO_LIBCAMERA
 
    LOGD("%s: id:%i faceing:%i orientation: %i", __FUNCTION__, camera_id, info->facing, info->orientation);
 
@@ -722,7 +745,11 @@ int camera_device_open(const hw_module_t* module, const char* name, hw_device_t*
    camera_ops->dump                       = camera_dump;
 
    lcdev->id = cameraId;
+#ifdef BOARD_USE_FROYO_LIBCAMERA
+   lcdev->hwif = openCameraHardware(cameraId);
+#else
    lcdev->hwif = HAL_openCameraHardware(cameraId);
+#endif
    if (lcdev->hwif == NULL) {
        ret = -EIO;
        goto err_create_camera_hw;
