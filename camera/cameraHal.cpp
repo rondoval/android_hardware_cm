@@ -122,8 +122,9 @@ static inline void log_camera_params(const char* name, const CameraParameters pa
 //
 // http://code.google.com/p/android/issues/detail?id=823#c4
 //
-void Yuv420spToRgba8888(char* rgb, char* yuv420sp, int width, int height) {
+void Yuv420spToRgb565(char* rgb, char* yuv420sp, int width, int height, int stride) {
     int frameSize = width * height;
+    int padding = (stride - width) * 2; //two bytes per pixel for rgb565
     int colr = 0;
     for (int j = 0, yp = 0, k = 0; j < height; j++) {
         int uvp = frameSize + (j >> 1) * width, u = 0, v = 0;
@@ -144,25 +145,25 @@ void Yuv420spToRgba8888(char* rgb, char* yuv420sp, int width, int height) {
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB8888 */
-            r = (r >> 10) & 0xff;
-            g = (g >> 10) & 0xff;
-            b = (b >> 10) & 0xff;
+            /* for RGB565 */
+            r = (r >> 13) & 0x1f;
+            g = (g >> 12) & 0x3f;
+            b = (b >> 13) & 0x1f;
 
-            rgb[k++] = r;
-            rgb[k++] = g;
-            rgb[k++] = b;
-            rgb[k++] = 255;
+            rgb[k++] = g << 5 | b;
+            rgb[k++] = r << 3 | g >> 3;
         }
+        k += padding;
     }
 }
 
-void Yuv422iToRgba8888 (char* rgb, char* yuv422i, int width, int height) {
+void Yuv422iToRgb565 (char* rgb, char* yuv422i, int width, int height, int stride) {
     int yuv_index = 0;
     int rgb_index = 0;
-    int frame_size = width * height;
+    int padding = (stride - width) * 2; //two bytes per pixel for rgb565
 
-    for (int i = 0; i < frame_size/2; i++) {
+    for (int j = 0; j < height; j++) {
+        for (int i = 0; i < width / 2; i++) {
 
             int y1 = (0xff & ((int) yuv422i[yuv_index++])) - 16;
             if (y1 < 0) y1 = 0;
@@ -183,15 +184,13 @@ void Yuv422iToRgba8888 (char* rgb, char* yuv422i, int width, int height) {
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB8888 */
-            r = (r >> 10) & 0xff;
-            g = (g >> 10) & 0xff;
-            b = (b >> 10) & 0xff;
+            /* for RGB565 */
+            r = (r >> 13) & 0x1f;
+            g = (g >> 12) & 0x3f;
+            b = (b >> 13) & 0x1f;
 
-            rgb[rgb_index++] = r;
-            rgb[rgb_index++] = g;
-            rgb[rgb_index++] = b;
-            rgb[rgb_index++] = 255;
+            rgb[rgb_index++] = g << 5 | b;
+            rgb[rgb_index++] = r << 3 | g >> 3;
 
             y1192 = 1192 * y2;
             r = (y1192 + 1634 * v);
@@ -202,15 +201,15 @@ void Yuv422iToRgba8888 (char* rgb, char* yuv422i, int width, int height) {
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB8888 */
-            r = (r >> 10) & 0xff;
-            g = (g >> 10) & 0xff;
-            b = (b >> 10) & 0xff;
+            /* for RGB565 */
+            r = (r >> 13) & 0x1f;
+            g = (g >> 12) & 0x3f;
+            b = (b >> 13) & 0x1f;
 
-            rgb[rgb_index++] = r;
-            rgb[rgb_index++] = g;
-            rgb[rgb_index++] = b;
-            rgb[rgb_index++] = 255;
+            rgb[rgb_index++] = g << 5 | b;
+            rgb[rgb_index++] = r << 3 | g >> 3;
+        }
+        rgb_index += padding;
     }
 }
 
@@ -223,7 +222,7 @@ void CameraHAL_ProcessPreviewData(char *frame, size_t size, legacy_camera_device
         if (retVal == NO_ERROR) {
             LOGV("%s: dequeued window, stride=%d", __FUNCTION__, stride);
             if ( stride != lcdev->previewWidth) {
-                LOGE("%s: stride=%d doesn't equal width=%d", __FUNCTION__, stride, lcdev->previewWidth);
+                LOGV("%s: stride=%d doesn't equal width=%d", __FUNCTION__, stride, lcdev->previewWidth);
             }
             retVal = lcdev->window->lock_buffer(lcdev->window, bufHandle);
             if (retVal == NO_ERROR) {
@@ -244,15 +243,15 @@ void CameraHAL_ProcessPreviewData(char *frame, size_t size, legacy_camera_device
                     tries--;
                 }
                 if (!err) {
-                    // The data we get is in YUV... but Window is RGBA8888. It needs to be converted
+                    // The data we get is in YUV... but Window is RGB565. It needs to be converted
                     switch (lcdev->previewFormat) {
                         case OVERLAY_FORMAT_YUV422I:
-                            Yuv422iToRgba8888((char*)vaddr, frame, lcdev->previewWidth, lcdev->previewHeight);
+                            Yuv422iToRgb565((char*)vaddr, frame, lcdev->previewWidth, lcdev->previewHeight, stride);
                             break;
                         case OVERLAY_FORMAT_YUV420SP:
-                            Yuv420spToRgba8888((char*)vaddr, frame, lcdev->previewWidth, lcdev->previewHeight);
+                            Yuv420spToRgb565((char*)vaddr, frame, lcdev->previewWidth, lcdev->previewHeight, stride);
                             break;
-                        case OVERLAY_FORMAT_RGBA8888:
+                        case OVERLAY_FORMAT_RGB565:
                             memcpy(vaddr, frame, size);
                             break;
                         default:
@@ -405,6 +404,9 @@ void CameraHAL_FixupParams(CameraParameters &settings)
 #ifdef MOTOROLA_CAMERA
   // Milestone2 camera doesn't support YUV420sp... it advertises so, but then sends YUV422I-yuyv data
   settings.set(CameraParameters::KEY_VIDEO_FRAME_FORMAT, CameraParameters::PIXEL_FORMAT_YUV422I);
+  settings.set(CameraParameters::KEY_PREFERRED_PREVIEW_SIZE_FOR_VIDEO, "848x480");
+  settings.set(CameraParameters::KEY_PREVIEW_FRAME_RATE, "24");
+  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FRAME_RATES, "5,10,15,20,24");
   settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FORMATS, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.setPreviewFormat(CameraParameters::PIXEL_FORMAT_YUV422I);
 
@@ -472,7 +474,7 @@ int camera_set_preview_window(struct camera_device * device, struct preview_stre
 
   CameraParameters params(lcdev->hwif->getParameters());
   params.getPreviewSize(&lcdev->previewWidth, &lcdev->previewHeight);
-  int hal_pixel_format = HAL_PIXEL_FORMAT_RGBA_8888;
+  int hal_pixel_format = HAL_PIXEL_FORMAT_RGB_565;
 
   const char *str_preview_format = params.getPreviewFormat();
   LOGD("%s: preview format %s", __FUNCTION__, str_preview_format);
