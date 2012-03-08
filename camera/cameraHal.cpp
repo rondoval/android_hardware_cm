@@ -145,13 +145,8 @@ void Yuv420spToRgb565(char* rgb, char* yuv420sp, int width, int height, int stri
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB565 */
-            r = (r >> 13) & 0x1f;
-            g = (g >> 12) & 0x3f;
-            b = (b >> 13) & 0x1f;
-
-            rgb[k++] = g << 5 | b;
-            rgb[k++] = r << 3 | g >> 3;
+            rgb[k++] = ((g >> 7) & 0xe0) | ((b >> 13) & 0x1f);
+            rgb[k++] = ((r >> 10) & 0xf8) | ((g >> 15) & 0x07);
         }
         k += padding;
     }
@@ -175,39 +170,33 @@ void Yuv422iToRgb565 (char* rgb, char* yuv422i, int width, int height, int strid
 
             int v = (0xff & yuv422i[yuv_index++]) - 128;
 
-            int y1192 = 1192 * y1;
-            int r = (y1192 + 1634 * v);
-            int g = (y1192 - 833 * v - 400 * u);
-            int b = (y1192 + 2066 * u);
+            int yy1 = 1192 * y1;
+            int yy2 = 1192 * y2;
+            int uv = 833 * v + 400 * u;
+            int uu = 2066 * u;
+            int vv = 1634 * v;
+
+            int r = yy1 + vv;
+            int g = yy1 - uv;
+            int b = yy1 + uu;
 
             if (r < 0) r = 0; else if (r > 262143) r = 262143;
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB565 */
-            r = (r >> 13) & 0x1f;
-            g = (g >> 12) & 0x3f;
-            b = (b >> 13) & 0x1f;
+            rgb[rgb_index++] = ((g >> 7) & 0xe0) | ((b >> 13) & 0x1f);
+            rgb[rgb_index++] = ((r >> 10) & 0xf8) | ((g >> 15) & 0x07);
 
-            rgb[rgb_index++] = g << 5 | b;
-            rgb[rgb_index++] = r << 3 | g >> 3;
-
-            y1192 = 1192 * y2;
-            r = (y1192 + 1634 * v);
-            g = (y1192 - 833 * v - 400 * u);
-            b = (y1192 + 2066 * u);
+            r = yy2 + vv;
+            g = yy2 - uv;
+            b = yy2 + uu;
 
             if (r < 0) r = 0; else if (r > 262143) r = 262143;
             if (g < 0) g = 0; else if (g > 262143) g = 262143;
             if (b < 0) b = 0; else if (b > 262143) b = 262143;
 
-            /* for RGB565 */
-            r = (r >> 13) & 0x1f;
-            g = (g >> 12) & 0x3f;
-            b = (b >> 13) & 0x1f;
-
-            rgb[rgb_index++] = g << 5 | b;
-            rgb[rgb_index++] = r << 3 | g >> 3;
+            rgb[rgb_index++] = ((g >> 7) & 0xe0) | ((b >> 13) & 0x1f);
+            rgb[rgb_index++] = ((r >> 10) & 0xf8) | ((g >> 15) & 0x07);
         }
         rgb_index += padding;
     }
@@ -403,10 +392,10 @@ void CameraHAL_FixupParams(CameraParameters &settings)
 {
 #ifdef MOTOROLA_CAMERA
   // Milestone2 camera doesn't support YUV420sp... it advertises so, but then sends YUV422I-yuyv data
+  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FPS_RANGE, "(5000,30000),(5000,25000),(5000,20000),(5000,24000),(5000,15000),(5000,10000)");
+  settings.set(CameraParameters::KEY_PREVIEW_FPS_RANGE, "5000,30000");
   settings.set(CameraParameters::KEY_VIDEO_FRAME_FORMAT, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.set(CameraParameters::KEY_PREFERRED_PREVIEW_SIZE_FOR_VIDEO, "848x480");
-  settings.set(CameraParameters::KEY_PREVIEW_FRAME_RATE, "24");
-  settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FRAME_RATES, "5,10,15,20,24");
   settings.set(CameraParameters::KEY_SUPPORTED_PREVIEW_FORMATS, CameraParameters::PIXEL_FORMAT_YUV422I);
   settings.setPreviewFormat(CameraParameters::PIXEL_FORMAT_YUV422I);
 
